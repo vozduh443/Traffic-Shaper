@@ -1,6 +1,6 @@
 # 🚦 Per-IP Traffic Shaper
 
-Простой Linux-агент для автоматического ограничения скорости отдельных IP-адресов при обнаружении аномально высокого TCP-трафика.
+Linux-агент для автоматического контроля TCP-трафика по IP-адресам и временного ограничения скорости IP при обнаружении аномально высокого потребления трафика.
 
 Агент использует:
 
@@ -13,38 +13,42 @@
 
 ## ⚡ Быстрая установка
 
-Установка выполняется одной командой:
+Установка на сервер выполняется одной командой:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/USERNAME/REPOSITORY/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/vozduh443/Traffic-Shaper/main/install.sh | bash
 ```
 
-Или:
+Если команда выполняется не от `root`:
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/USERNAME/REPOSITORY/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/vozduh443/Traffic-Shaper/main/install.sh | sudo bash
 ```
 
-> Замените `USERNAME/REPOSITORY` на адрес вашего GitHub-репозитория.
-
-Для запуска через `sudo`:
+Альтернативный вариант через `wget`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/USERNAME/REPOSITORY/main/install.sh | sudo bash
+wget -qO- https://raw.githubusercontent.com/vozduh443/Traffic-Shaper/main/install.sh | sudo bash
 ```
+
+Установщик автоматически установит зависимости, создаст конфигурацию, systemd-сервис и запустит шейпер.
 
 ---
 
-## 📦 Установка из GitHub
+## 📦 Установка через Git
 
-Если репозиторий уже клонирован:
+Если нужно сначала скачать репозиторий:
 
 ```bash
-git clone https://github.com/USERNAME/REPOSITORY.git
-cd REPOSITORY
+git clone https://github.com/vozduh443/Traffic-Shaper.git
+cd Traffic-Shaper
 chmod +x install.sh
 sudo ./install.sh
 ```
+
+Репозиторий:
+
+https://github.com/vozduh443/Traffic-Shaper
 
 ---
 
@@ -52,37 +56,38 @@ sudo ./install.sh
 
 `install.sh` автоматически:
 
-1. Проверяет запуск от `root`.
-2. Устанавливает необходимые пакеты:
+1. Проверяет наличие root-доступа.
+2. Обновляет список пакетов.
+3. Устанавливает необходимые зависимости:
 
    * `conntrack`
    * `iproute2`
    * `python3`
-3. Создаёт:
+4. Создаёт директорию:
 
 ```text
 /opt/shaper/
 ```
 
-4. Устанавливает:
+5. Устанавливает шейпер:
 
 ```text
 /opt/shaper/shaper.py
 ```
 
-5. Создаёт systemd unit:
+6. Создаёт systemd-сервис:
 
 ```text
 /etc/systemd/system/shaper.service
 ```
 
-6. Включает автоматический запуск:
+7. Включает автоматический запуск после перезагрузки:
 
 ```bash
 systemctl enable shaper
 ```
 
-7. Запускает сервис:
+8. Запускает сервис:
 
 ```bash
 systemctl restart shaper
@@ -90,9 +95,9 @@ systemctl restart shaper
 
 ---
 
-## ⚙️ Конфигурация
+# ⚙️ Конфигурация
 
-Основные параметры находятся в начале:
+Основные параметры находятся в начале `shaper.py`:
 
 ```python
 LIMIT_GB_PER_HOUR  = 20
@@ -101,45 +106,57 @@ SHAPE_DURATION_MIN = 120
 CHECK_INTERVAL_SEC = 60
 ```
 
-### Порог
+---
+
+## 📊 Порог трафика
 
 ```python
 LIMIT_GB_PER_HOUR = 20
 ```
 
-IP считается нарушителем, если рассчитанная скорость трафика превышает:
+Порог:
 
 ```text
 20 GB/hour
 ```
 
-### Ограничение
+Если расчётная скорость потребления IP превышает установленный порог, IP считается аномальным и для него включается ограничение.
+
+---
+
+## 🚦 Ограничение скорости
 
 ```python
 SHAPE_MBIT = 5
 ```
 
-Для обнаруженного IP устанавливается ограничение:
+Для IP, превысившего установленный порог:
 
 ```text
 5 Mbit/s
 ```
 
-### Продолжительность
+Ограничение реализуется через `tc` и HTB.
+
+---
+
+## ⏱ Продолжительность ограничения
 
 ```python
 SHAPE_DURATION_MIN = 120
 ```
 
-Ограничение действует:
+Ограничение устанавливается на:
 
 ```text
 120 минут
 ```
 
-После истечения времени правило `tc` удаляется.
+После истечения времени агент автоматически удаляет соответствующий `tc` filter/class.
 
-### Интервал проверки
+---
+
+## 🔄 Интервал проверки
 
 ```python
 CHECK_INTERVAL_SEC = 60
@@ -153,9 +170,9 @@ CHECK_INTERVAL_SEC = 60
 
 ---
 
-## 🌐 Мониторируемые порты
+# 🌐 Мониторируемые порты
 
-По умолчанию отслеживаются:
+По умолчанию контролируются TCP-соединения на следующих портах:
 
 ```python
 MONITOR_PORTS = {
@@ -167,7 +184,7 @@ MONITOR_PORTS = {
 }
 ```
 
-Чтобы изменить список:
+Чтобы изменить список портов, отредактируйте:
 
 ```python
 MONITOR_PORTS = {
@@ -176,11 +193,27 @@ MONITOR_PORTS = {
 }
 ```
 
+Например, только HTTPS:
+
+```python
+MONITOR_PORTS = {
+    443,
+}
+```
+
+После изменения конфигурации перезапустите сервис:
+
+```bash
+systemctl restart shaper
+```
+
 ---
 
-## 🟢 Whitelist
+# 🟢 Whitelist
 
-Отдельные IP можно исключить из мониторинга:
+IP-адреса из whitelist не участвуют в проверке и не будут ограничиваться шейпером.
+
+Текущий список:
 
 ```python
 WHITELIST_IPS = {
@@ -190,7 +223,11 @@ WHITELIST_IPS = {
 }
 ```
 
-Поддерживаются также целые подсети:
+---
+
+## 🟢 Whitelist подсетей
+
+Можно исключать целые подсети:
 
 ```python
 WHITELIST_SUBNETS = [
@@ -203,18 +240,40 @@ WHITELIST_SUBNETS = [
 ]
 ```
 
----
+Чтобы добавить свою подсеть:
 
-## 📁 Файлы
-
-После установки:
-
-```text
-/opt/shaper/
-└── shaper.py
+```python
+ipaddress.ip_network("203.0.113.0/24"),
 ```
 
-Systemd:
+Или отдельный IP:
+
+```python
+WHITELIST_IPS = {
+    "127.0.0.1",
+    "::1",
+    "146.59.34.209",
+    "203.0.113.10",
+}
+```
+
+После изменения:
+
+```bash
+systemctl restart shaper
+```
+
+---
+
+# 📁 Файлы после установки
+
+Основной скрипт:
+
+```text
+/opt/shaper/shaper.py
+```
+
+Systemd unit:
 
 ```text
 /etc/systemd/system/shaper.service
@@ -228,73 +287,137 @@ Systemd:
 
 ---
 
-## 🔍 Проверка сервиса
+# 🔍 Проверка сервиса
 
-Статус:
+Показать подробный статус:
 
 ```bash
 systemctl status shaper --no-pager
 ```
 
-Проверка, запущен ли сервис:
+Проверить, запущен ли сервис:
 
 ```bash
 systemctl is-active shaper
 ```
 
-Проверка автозапуска:
+Проверить автозапуск:
 
 ```bash
 systemctl is-enabled shaper
 ```
 
+Ожидаемый результат:
+
+```text
+active
+```
+
+и:
+
+```text
+enabled
+```
+
 ---
 
-## 📜 Просмотр логов
+# 📜 Логи
 
-В реальном времени:
+## Логи systemd в реальном времени
 
 ```bash
 journalctl -u shaper -f
 ```
 
-Последние 50 строк:
+Остановить просмотр:
+
+```text
+Ctrl+C
+```
+
+---
+
+## Последние 50 строк
 
 ```bash
 journalctl -u shaper -n 50 --no-pager
 ```
 
-Лог самого приложения:
+---
+
+## Все логи текущего запуска
+
+```bash
+journalctl -u shaper -b --no-pager
+```
+
+---
+
+## Лог приложения
 
 ```bash
 tail -f /var/log/shaper.log
 ```
 
+Последние 50 строк:
+
+```bash
+tail -n 50 /var/log/shaper.log
+```
+
 ---
 
-## 🚦 Проверка tc
+# 🚦 Проверка tc
 
-Посмотреть root qdisc:
+Определить основной сетевой интерфейс:
+
+```bash
+ip route | grep default
+```
+
+Например:
+
+```text
+default via 192.168.1.1 dev ens3
+```
+
+В данном случае интерфейс:
+
+```text
+ens3
+```
+
+---
+
+## Проверить qdisc
+
+Автоматически определить интерфейс:
 
 ```bash
 tc qdisc show dev $(ip route | grep default | awk '{print $5}')
 ```
 
-Посмотреть классы:
+---
+
+## Проверить классы HTB
 
 ```bash
 tc class show dev $(ip route | grep default | awk '{print $5}')
 ```
 
-Посмотреть фильтры:
+---
+
+## Проверить фильтры
 
 ```bash
 tc filter show dev $(ip route | grep default | awk '{print $5}')
 ```
 
+Если IP был ограничен, в выводе появится соответствующий `u32` filter и HTB class.
+
 ---
 
-## 🌐 Проверка conntrack
+# 🌐 Проверка conntrack
 
 Количество TCP-соединений:
 
@@ -302,79 +425,113 @@ tc filter show dev $(ip route | grep default | awk '{print $5}')
 conntrack -L -p tcp | wc -l
 ```
 
-Посмотреть соединения:
+Посмотреть текущие TCP-соединения:
 
 ```bash
 conntrack -L -p tcp
 ```
 
+Проверить, что conntrack установлен:
+
+```bash
+which conntrack
+```
+
+Ожидаемый результат:
+
+```text
+/usr/sbin/conntrack
+```
+
 ---
 
-## 🔄 Управление сервисом
+# 🔄 Управление сервисом
 
-Запустить:
+## Запустить
 
 ```bash
 systemctl start shaper
 ```
 
-Остановить:
+## Остановить
 
 ```bash
 systemctl stop shaper
 ```
 
-Перезапустить:
+## Перезапустить
 
 ```bash
 systemctl restart shaper
 ```
 
-Отключить автозапуск:
-
-```bash
-systemctl disable shaper
-```
-
-Включить автозапуск:
+## Включить автозапуск
 
 ```bash
 systemctl enable shaper
 ```
 
----
-
-## 🗑️ Удаление
-
-Остановить и удалить systemd-сервис:
+## Отключить автозапуск
 
 ```bash
-systemctl disable --now shaper
-rm -f /etc/systemd/system/shaper.service
-systemctl daemon-reload
+systemctl disable shaper
 ```
 
-Удалить файлы шейпера:
+## Перезапустить после изменения конфигурации
 
 ```bash
-rm -rf /opt/shaper
-```
-
-Удалить лог:
-
-```bash
-rm -f /var/log/shaper.log
-```
-
-При необходимости удалить зависимости:
-
-```bash
-apt remove -y conntrack
+systemctl restart shaper
 ```
 
 ---
 
-## 🧠 Как работает
+# 🧪 Быстрая диагностика
+
+Если шейпер не работает:
+
+```bash
+systemctl status shaper --no-pager
+```
+
+Затем:
+
+```bash
+journalctl -u shaper -n 50 --no-pager
+```
+
+Проверить наличие Python:
+
+```bash
+python3 --version
+```
+
+Проверить conntrack:
+
+```bash
+conntrack --version
+```
+
+Проверить tc:
+
+```bash
+tc -V
+```
+
+Проверить интерфейс:
+
+```bash
+ip route show default
+```
+
+Проверить qdisc:
+
+```bash
+tc qdisc show
+```
+
+---
+
+# 🧠 Как работает
 
 Упрощённая схема:
 
@@ -392,10 +549,10 @@ apt remove -y conntrack
                              ▼
                     ┌──────────────────┐
                     │  Traffic Shaper  │
-                    │     Python       │
+                    │      Python      │
                     └────────┬─────────┘
                              │
-                  > 20 GB/hour ?
+                     > 20 GB/hour ?
                          /       \
                        NO         YES
                        │           │
@@ -409,31 +566,190 @@ apt remove -y conntrack
                               120 minutes
 ```
 
-Агент каждые 60 секунд получает статистику TCP-соединений через `conntrack`, группирует трафик по исходному IP и рассчитывает приблизительный объём трафика за час.
+Агент с заданным интервалом получает статистику TCP-соединений через `conntrack`.
 
-Если расчётный показатель превышает установленный порог, для IP создаётся `tc` HTB-класс и фильтр с ограничением скорости.
+Для каждого IP рассчитывается объём переданного трафика за измерительный интервал и пересчитывается в приблизительное значение GB/hour.
 
-После окончания периода ограничения правило удаляется.
+Если рассчитанное значение превышает:
+
+```text
+20 GB/hour
+```
+
+для IP создаётся ограничивающий HTB-класс:
+
+```text
+5 Mbit/s
+```
+
+Ограничение действует:
+
+```text
+120 минут
+```
+
+После истечения времени правило удаляется.
 
 ---
 
-## ⚠️ Требования
+# 🔄 Автоматическое восстановление
 
-Поддерживается Linux-система с:
+Сервис работает через systemd с автоматическим рестартом.
 
-* `systemd`
-* `iproute2`
-* `conntrack`
-* `python3`
-* root-доступом
+При сбое процесса systemd перезапустит шейпер.
 
-Установка рассчитана на Debian/Ubuntu-подобные системы с `apt`.
+Проверить настройки:
+
+```bash
+systemctl cat shaper
+```
+
+---
+
+# 🗑️ Удаление
+
+Остановить и отключить сервис:
+
+```bash
+systemctl disable --now shaper
+```
+
+Удалить systemd unit:
+
+```bash
+rm -f /etc/systemd/system/shaper.service
+systemctl daemon-reload
+```
+
+Удалить шейпер:
+
+```bash
+rm -rf /opt/shaper
+```
+
+Удалить лог:
+
+```bash
+rm -f /var/log/shaper.log
+```
+
+---
+
+## Удаление conntrack
+
+Если `conntrack` больше не используется другими сервисами:
+
+```bash
+apt remove -y conntrack
+```
+
+> Не удаляйте `conntrack`, если он используется другими компонентами сервера.
+
+---
+
+# ⚠️ Требования
+
+Система должна иметь:
+
+* Linux;
+* systemd;
+* Python 3;
+* `iproute2`;
+* `conntrack`;
+* root-доступ;
+* пакетный менеджер `apt`.
+
+Установщик рассчитан прежде всего на:
+
+* Debian;
+* Ubuntu;
+* другие Debian-based системы с `apt`.
+
+---
+
+# ⚠️ Важные замечания
+
+Шейпер работает на уровне сетевого интерфейса через `tc`.
+
+Поэтому перед использованием на production-сервере рекомендуется проверить:
+
+```bash
+ip route show default
+```
+
+и:
+
+```bash
+tc qdisc show
+```
+
+Также учитывайте, что установка собственного root `qdisc` может взаимодействовать с уже существующей конфигурацией `tc`.
+
+Если на сервере уже используется сложная конфигурация `tc`, её следует проверить перед запуском.
+
+---
+
+# 📌 Текущая конфигурация по умолчанию
+
+| Параметр          |                    Значение |
+| ----------------- | --------------------------: |
+| Порог             |                  20 GB/hour |
+| Ограничение       |                    5 Mbit/s |
+| Длительность      |                   120 минут |
+| Интервал проверки |                   60 секунд |
+| Порты             | 8880, 443, 8443, 8445, 8080 |
+| Директория        |               `/opt/shaper` |
+| Скрипт            |     `/opt/shaper/shaper.py` |
+| Service           |            `shaper.service` |
+| Лог               |       `/var/log/shaper.log` |
+
+---
+
+# 📂 Структура
+
+```text
+Traffic-Shaper/
+├── install.sh
+└── README.md
+```
+
+После установки на сервере:
+
+```text
+/opt/shaper/
+└── shaper.py
+
+/etc/systemd/system/
+└── shaper.service
+
+/var/log/
+└── shaper.log
+```
+
+---
+
+# 🚀 One-Line Install
+
+Для быстрого развёртывания:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/vozduh443/Traffic-Shaper/main/install.sh | sudo bash
+```
+
+После установки проверить:
+
+```bash
+systemctl status shaper --no-pager
+```
+
+И посмотреть работу в реальном времени:
+
+```bash
+journalctl -u shaper -f
+```
 
 ---
 
 ## 📄 License
 
 MIT License
-
-```
-```
