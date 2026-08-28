@@ -1,4 +1,3 @@
-```bash
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -594,4 +593,3 @@ else
     echo "  journalctl -u shaper -n 50 --no-pager"
     exit 1
 fi
-```
