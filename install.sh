@@ -398,7 +398,6 @@ def check_and_shape():
 
     traffic = get_traffic_by_ip()
 
-    # Remove expired shaping rules
     expired = [
         ip
         for ip, data in shaped.items()
@@ -411,7 +410,6 @@ def check_and_shape():
 
         unshape_ip(ip)
 
-    # Process traffic
     for ip, total_bytes in traffic.items():
 
         if ip in shaped:
