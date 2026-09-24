@@ -23,7 +23,7 @@ echo "        🚦 Per-IP Traffic Shaper — Installer"
 echo "============================================================"
 echo
 
-echo "[1/6] Проверка зависимостей..."
+echo "[1/7] Проверка зависимостей..."
 
 export DEBIAN_FRONTEND=noninteractive
 
@@ -33,11 +33,10 @@ apt-get install -y conntrack iproute2 python3 curl
 echo "✓ Зависимости установлены"
 echo
 
-echo "[2/6] Включение nf_conntrack_acct..."
+echo "[2/7] Включение nf_conntrack_acct..."
 
 # КРИТИЧНО: без этого параметра ядра conntrack не считает байты
 # для уже установленных (существующих) TCP-соединений — только для новых.
-# Без acct=1 шейпер физически не видит объём трафика по большинству соединений.
 sysctl -w net.netfilter.nf_conntrack_acct=1 >/dev/null
 if ! grep -q "net.netfilter.nf_conntrack_acct" /etc/sysctl.conf 2>/dev/null; then
     echo "net.netfilter.nf_conntrack_acct=1" >> /etc/sysctl.conf
@@ -46,7 +45,7 @@ fi
 echo "✓ nf_conntrack_acct=1 (сохранено в /etc/sysctl.conf)"
 echo
 
-echo "[3/6] Автоопределение внешнего IP сервера..."
+echo "[3/7] Автоопределение внешнего IP сервера..."
 
 SELF_IP=$(curl -s -4 --max-time 5 https://ifconfig.me || curl -s -4 --max-time 5 https://api.ipify.org || echo "")
 
@@ -57,14 +56,32 @@ else
 fi
 echo
 
-echo "[4/6] Создание директории..."
+echo "[4/7] Загрузка актуальных подсетей Yandex Cloud CDN..."
+
+YC_CDN_JSON=$(curl -s --max-time 10 https://tech.cdn.yandex.net/prefixes/yc.json || echo "")
+YC_CDN_PREFIXES=$(echo "${YC_CDN_JSON}" | grep -oP '"\K[0-9.]+/[0-9]+(?=")')
+
+YC_CDN_PY_LIST=""
+YC_COUNT=0
+if [ -n "${YC_CDN_PREFIXES}" ]; then
+    for NET in ${YC_CDN_PREFIXES}; do
+        YC_CDN_PY_LIST="${YC_CDN_PY_LIST}    ipaddress.ip_network(\"${NET}\"),\n"
+        YC_COUNT=$((YC_COUNT+1))
+    done
+    echo "✓ Загружено подсетей Yandex Cloud CDN: ${YC_COUNT}"
+else
+    echo "⚠️  Не удалось загрузить подсети Yandex CDN, whitelist останется без них"
+fi
+echo
+
+echo "[5/7] Создание директории..."
 
 mkdir -p "${INSTALL_DIR}"
 
 echo "✓ ${INSTALL_DIR}"
 echo
 
-echo "[5/6] Установка shaper.py..."
+echo "[6/7] Установка shaper.py..."
 
 cat > "${SCRIPT_PATH}" << 'PYEOF'
 #!/usr/bin/env python3
@@ -119,6 +136,8 @@ WHITELIST_SUBNETS = [
     ipaddress.ip_network("10.0.0.0/8"),
     ipaddress.ip_network("172.16.0.0/12"),
     ipaddress.ip_network("192.168.0.0/16"),
+    # ── Yandex Cloud CDN (автозагружено при установке) ──
+__YANDEX_CDN_SUBNETS__
 ]
 
 
@@ -555,11 +574,26 @@ if __name__ == "__main__":
     main()
 PYEOF
 
-# Подстановка реального внешнего IP сервера в whitelist
+# ── Подстановка реального внешнего IP сервера ──
 if [ -n "${SELF_IP}" ]; then
     sed -i "s/__SELF_IP__/${SELF_IP}/" "${SCRIPT_PATH}"
 else
     sed -i '/"__SELF_IP__",/d' "${SCRIPT_PATH}"
+fi
+
+# ── Подстановка подсетей Yandex Cloud CDN ──
+if [ -n "${YC_CDN_PY_LIST}" ]; then
+    python3 - "${SCRIPT_PATH}" << PYSUB
+import sys
+path = sys.argv[1]
+with open(path, "r", encoding="utf-8") as f:
+    content = f.read()
+content = content.replace("__YANDEX_CDN_SUBNETS__\n", """${YC_CDN_PY_LIST}""")
+with open(path, "w", encoding="utf-8") as f:
+    f.write(content)
+PYSUB
+else
+    sed -i '/__YANDEX_CDN_SUBNETS__/d' "${SCRIPT_PATH}"
 fi
 
 chmod +x "${SCRIPT_PATH}"
@@ -567,7 +601,7 @@ chmod +x "${SCRIPT_PATH}"
 echo "✓ ${SCRIPT_PATH}"
 echo
 
-echo "[6/6] Создание systemd сервиса..."
+echo "[7/7] Создание systemd сервиса..."
 
 cat > "${SERVICE_PATH}" << 'EOF'
 [Unit]
@@ -605,19 +639,17 @@ if systemctl is-active --quiet shaper.service; then
     echo "              ✅ Установка завершена"
     echo "============================================================"
     echo
-    echo "Сервис:      shaper.service"
-    echo "Скрипт:      ${SCRIPT_PATH}"
-    echo "Лог:         ${LOG_FILE}"
-    echo "IP в whitelist: ${SELF_IP:-не определён}"
+    echo "Сервис:            shaper.service"
+    echo "Скрипт:            ${SCRIPT_PATH}"
+    echo "Лог:               ${LOG_FILE}"
+    echo "IP в whitelist:    ${SELF_IP:-не определён}"
+    echo "Yandex CDN подсетей: ${YC_COUNT:-0}"
     echo
     echo "Статус:"
     systemctl --no-pager --full status shaper.service
     echo
     echo "Для просмотра логов:"
     echo "  journalctl -u shaper -f"
-    echo
-    echo "Для проверки tc:"
-    echo "  tc qdisc show dev \$(ip route | grep default | awk '{print \$5}')"
     echo
 else
     echo
