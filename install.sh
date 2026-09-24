@@ -23,24 +23,48 @@ echo "        🚦 Per-IP Traffic Shaper — Installer"
 echo "============================================================"
 echo
 
-echo "[1/5] Проверка зависимостей..."
+echo "[1/6] Проверка зависимостей..."
 
 export DEBIAN_FRONTEND=noninteractive
 
 apt-get update -qq
-apt-get install -y conntrack iproute2 python3
+apt-get install -y conntrack iproute2 python3 curl
 
 echo "✓ Зависимости установлены"
 echo
 
-echo "[2/5] Создание директории..."
+echo "[2/6] Включение nf_conntrack_acct..."
+
+# КРИТИЧНО: без этого параметра ядра conntrack не считает байты
+# для уже установленных (существующих) TCP-соединений — только для новых.
+# Без acct=1 шейпер физически не видит объём трафика по большинству соединений.
+sysctl -w net.netfilter.nf_conntrack_acct=1 >/dev/null
+if ! grep -q "net.netfilter.nf_conntrack_acct" /etc/sysctl.conf 2>/dev/null; then
+    echo "net.netfilter.nf_conntrack_acct=1" >> /etc/sysctl.conf
+fi
+
+echo "✓ nf_conntrack_acct=1 (сохранено в /etc/sysctl.conf)"
+echo
+
+echo "[3/6] Автоопределение внешнего IP сервера..."
+
+SELF_IP=$(curl -s -4 --max-time 5 https://ifconfig.me || curl -s -4 --max-time 5 https://api.ipify.org || echo "")
+
+if [ -n "${SELF_IP}" ]; then
+    echo "✓ Внешний IP сервера: ${SELF_IP} (будет добавлен в whitelist)"
+else
+    echo "⚠️  Не удалось определить внешний IP автоматически"
+fi
+echo
+
+echo "[4/6] Создание директории..."
 
 mkdir -p "${INSTALL_DIR}"
 
 echo "✓ ${INSTALL_DIR}"
 echo
 
-echo "[3/5] Установка shaper.py..."
+echo "[5/6] Установка shaper.py..."
 
 cat > "${SCRIPT_PATH}" << 'PYEOF'
 #!/usr/bin/env python3
@@ -69,6 +93,10 @@ SHAPE_MBIT         = 5
 SHAPE_DURATION_MIN = 120
 CHECK_INTERVAL_SEC = 60
 
+# Таймаут вызова `conntrack -L`. На нагруженных серверах с большой
+# conntrack-таблицей дефолтные 10 сек может не хватать — увеличено до 15.
+CONNTRACK_TIMEOUT_SEC = 15
+
 MONITOR_PORTS = {
     8880,
     443,
@@ -81,6 +109,7 @@ WHITELIST_IPS = {
     "127.0.0.1",
     "::1",
     "146.59.34.209",
+    "__SELF_IP__",
 }
 
 WHITELIST_SUBNETS = [
@@ -165,7 +194,7 @@ def get_traffic_by_ip() -> dict:
             ["conntrack", "-L", "-p", "tcp"],
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=CONNTRACK_TIMEOUT_SEC,
         )
 
         for line in result.stdout.splitlines():
@@ -526,12 +555,19 @@ if __name__ == "__main__":
     main()
 PYEOF
 
+# Подстановка реального внешнего IP сервера в whitelist
+if [ -n "${SELF_IP}" ]; then
+    sed -i "s/__SELF_IP__/${SELF_IP}/" "${SCRIPT_PATH}"
+else
+    sed -i '/"__SELF_IP__",/d' "${SCRIPT_PATH}"
+fi
+
 chmod +x "${SCRIPT_PATH}"
 
 echo "✓ ${SCRIPT_PATH}"
 echo
 
-echo "[4/5] Создание systemd сервиса..."
+echo "[6/6] Создание systemd сервиса..."
 
 cat > "${SERVICE_PATH}" << 'EOF'
 [Unit]
@@ -555,7 +591,7 @@ EOF
 echo "✓ ${SERVICE_PATH}"
 echo
 
-echo "[5/5] Запуск сервиса..."
+echo "Запуск сервиса..."
 
 systemctl daemon-reload
 systemctl enable shaper.service
@@ -569,9 +605,10 @@ if systemctl is-active --quiet shaper.service; then
     echo "              ✅ Установка завершена"
     echo "============================================================"
     echo
-    echo "Сервис:     shaper.service"
-    echo "Скрипт:     ${SCRIPT_PATH}"
-    echo "Лог:        ${LOG_FILE}"
+    echo "Сервис:      shaper.service"
+    echo "Скрипт:      ${SCRIPT_PATH}"
+    echo "Лог:         ${LOG_FILE}"
+    echo "IP в whitelist: ${SELF_IP:-не определён}"
     echo
     echo "Статус:"
     systemctl --no-pager --full status shaper.service
